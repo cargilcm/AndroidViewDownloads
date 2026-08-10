@@ -31,21 +31,11 @@ jobs:
         with:
           java-version: "21"
           distribution: "temurin"
-          cache: ${{ github.event.inputs.use_cache != 'false' && 'gradle' || '' }}
 
-      - name: Cache Gradle Build Files
-        if: ${{ github.event.inputs.use_cache != 'false' }}
-        uses: actions/cache@v5
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', '**/libs.versions.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+          gradle-version: "8.11.1"
 
       - name: Set Commit Hash
         id: commit_hash
@@ -55,7 +45,7 @@ jobs:
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon
 
       - name: Archive APK Artifact
         uses: actions/upload-artifact@v7
