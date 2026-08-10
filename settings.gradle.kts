@@ -12,5 +12,6 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "FileViewer"
+
+rootProject.name = "AndroidViewDownloads"
 include(":app")
