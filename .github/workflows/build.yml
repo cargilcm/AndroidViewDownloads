@@ -16,11 +16,9 @@ on:
         default: true
 
 jobs:
-  build-release:
-    name: Build Release
+  build:
+    name: Build Android App
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       - uses: actions/checkout@v6
@@ -46,11 +44,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Decode and create secrets
-        run: |
-          echo "${{ secrets.KEYSTORE }}" | base64 -d > /tmp/xed.keystore
-          echo "${{ secrets.PROP }}" | base64 -d > /tmp/signing.properties
-
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
@@ -61,46 +54,11 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
-      - name: Build with Gradle
-        run: ./gradlew assembleRelease --no-daemon && mv app/build/outputs/apk/release/*.apk app/xed-editor-${{ env.COMMIT_HASH }}.apk
-        env:
-          KEYSTORE_FILE: /tmp/xed.keystore
-          SIGNING_PROPERTIES_FILE: /tmp/signing.properties
-        continue-on-error: false
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon
 
-      - name: Archive APK
+      - name: Archive APK Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: Xed-Editor-Release
-          path: app/xed-editor-${{ env.COMMIT_HASH }}.apk
-
-      - name: Delete secrets
-        run: rm /tmp/xed.keystore /tmp/signing.properties
-
-      - name: Send APK to Telegram
-        if: ${{ success() && github.event.head_commit.message != '' }}
-        env:
-          COMMIT_MSG: ${{ github.event.head_commit.message }}
-        run: |
-          curl -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_TOKEN }}/sendDocument" \
-            -F chat_id="-1002408175863" \
-            -F message_thread_id="582" \
-            -F document=@"app/xed-editor-${{ env.COMMIT_HASH }}.apk" \
-            --form-string "caption=$COMMIT_MSG"
-
-      - name: Generate Plugin Sdk
-        run: |
-          bash plugin-sdk/build-auto.sh
-
-      - name: Update Release
-        if: ${{ hashFiles('plugin-sdk/output/sdk.jar') != '' }}
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "plugin-sdk/output/sdk.jar"
-          tag: "sdk-latest"
-          allowUpdates: true
-          replacesArtifacts: true
-          makeLatest: false
-          name: "Latest Plugin SDK Build"
-          body: "This release is automatically updated with the latest sdk.jar."
-          token: ${{ secrets.GITHUB_TOKEN }}
+          name: AndroidViewDownloads-${{ env.COMMIT_HASH }}
+          path: app/build/outputs/apk/debug/*.apk
