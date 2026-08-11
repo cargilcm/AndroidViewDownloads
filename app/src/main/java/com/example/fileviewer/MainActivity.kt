@@ -3,8 +3,10 @@ package com.example.fileviewer
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.Settings
 import android.webkit.MimeTypeMap
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -24,8 +26,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -45,7 +50,83 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                FileBrowserScreen()
+                MainContent()
+            }
+        }
+    }
+}
+
+@Composable
+fun MainContent() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Reactive state to check if All Files Access is granted
+    var hasStoragePermission by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Environment.isExternalStorageManager()
+            } else {
+                true
+            }
+        )
+    }
+
+    // Re-check permission automatically when user returns from Settings
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    hasStoragePermission = Environment.isExternalStorageManager()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    if (!hasStoragePermission) {
+        PermissionRequestScreen(
+            onRequestPermission = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    try {
+                        val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                        context.startActivity(intent)
+                    }
+                }
+            }
+        )
+    } else {
+        FileBrowserScreen()
+    }
+}
+
+@Composable
+fun PermissionRequestScreen(onRequestPermission: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "Storage Permission Required",
+                style = MaterialTheme.typography.headlineSmall
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "All Files Access is required to read and list files from public external storage directories.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(onClick = onRequestPermission) {
+                Text("Grant Permission in Settings")
             }
         }
     }
@@ -69,26 +150,21 @@ fun FileBrowserScreen(
     var isSearchActive by remember { mutableStateOf(false) }
     var sortOption by remember { mutableStateOf(SortOption.NAME_ASC) }
     var showSortMenu by remember { mutableStateOf(false) }
-    
-    // File selected for the long-press options dialog
     var selectedFileForOptions by remember { mutableStateOf<File?>(null) }
 
-    // Filter by search query and sort items dynamically
+    // Read and divide files vs subdirectories
     val (subfolders, files) = remember(currentDirectory, searchQuery, sortOption) {
         val allContent = currentDirectory.listFiles()?.toList() ?: emptyList()
-        
-        // 1. Filter by search query (File name matching)
+
         val filtered = if (searchQuery.isBlank()) {
             allContent
         } else {
             allContent.filter { it.name.contains(searchQuery, ignoreCase = true) }
         }
 
-        // 2. Separate into subfolders and files
         val dirs = filtered.filter { it.isDirectory }
         val nonDirs = filtered.filter { it.isFile }
 
-        // 3. Apply sorting rule
         val sortedDirs = when (sortOption) {
             SortOption.NAME_ASC -> dirs.sortedBy { it.name.lowercase() }
             SortOption.NAME_DESC -> dirs.sortedByDescending { it.name.lowercase() }
@@ -129,10 +205,6 @@ fun FileBrowserScreen(
                             onValueChange = { searchQuery = it },
                             placeholder = { Text("Search files...") },
                             singleLine = true,
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surface,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                            ),
                             modifier = Modifier.fillMaxWidth()
                         )
                     } else {
@@ -140,7 +212,6 @@ fun FileBrowserScreen(
                     }
                 },
                 actions = {
-                    // Search Toggle Action
                     IconButton(onClick = {
                         isSearchActive = !isSearchActive
                         if (!isSearchActive) searchQuery = ""
@@ -150,12 +221,9 @@ fun FileBrowserScreen(
                             contentDescription = "Search"
                         )
                     }
-
-                    // Sort Menu Action
                     IconButton(onClick = { showSortMenu = true }) {
                         Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Sort Options")
                     }
-
                     DropdownMenu(
                         expanded = showSortMenu,
                         onDismissRequest = { showSortMenu = false }
@@ -179,7 +247,7 @@ fun FileBrowserScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // 1. Render Subdirectories
+            // Render Directories
             items(subfolders) { folder ->
                 FolderCard(
                     folder = folder,
@@ -191,7 +259,7 @@ fun FileBrowserScreen(
                 )
             }
 
-            // 2. Render File Items
+            // Render Files
             items(files) { file ->
                 FileRowItem(
                     file = file,
@@ -200,7 +268,6 @@ fun FileBrowserScreen(
             }
         }
 
-        // Long-Press Action Dialog
         selectedFileForOptions?.let { file ->
             AlertDialog(
                 onDismissRequest = { selectedFileForOptions = null },
@@ -278,7 +345,7 @@ fun FileRowItem(
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
             .combinedClickable(
-                onClick = { /* Short click can be assigned to a preview or remain neutral */ },
+                onClick = { /* Short click action */ },
                 onLongClick = onLongClick
             )
     ) {
@@ -306,7 +373,6 @@ fun FileRowItem(
     }
 }
 
-// Helpers
 private fun formatFileSize(sizeInBytes: Long): String {
     if (sizeInBytes <= 0) return "0 B"
     val units = arrayOf("B", "KB", "MB", "GB")
