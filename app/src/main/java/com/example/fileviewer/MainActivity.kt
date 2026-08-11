@@ -399,15 +399,35 @@ private fun openFile(context: Context, file: File) {
             "${context.packageName}.fileprovider",
             file
         )
-        val extension = file.extension.lowercase()
-        val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
+
+        val extension = file.extension.lowercase(Locale.getDefault())
+        var mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
         
+        // Fallback MIME types if MimeTypeMap returns null
+        if (mimeType == null) {
+            mimeType = when (extension) {
+                "pdf" -> "application/pdf"
+                "txt", "log", "conf" -> "text/plain"
+                "json" -> "application/json"
+                "zip", "rar", "7z", "tar", "gz" -> "application/zip"
+                "apk" -> "application/vnd.android.package-archive"
+                else -> "*/*"
+            }
+        }
+
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        context.startActivity(intent)
+
+        // Always wrap in Intent.createChooser to let the user pick the target app
+        val chooserIntent = Intent.createChooser(intent, "Open file with...")
+        chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        context.startActivity(chooserIntent)
     } catch (e: Exception) {
-        Toast.makeText(context, "Cannot open ${file.name}", Toast.LENGTH_SHORT).show()
+        e.printStackTrace()
+        Toast.makeText(context, "No app available to open ${file.name}", Toast.LENGTH_SHORT).show()
     }
 }
