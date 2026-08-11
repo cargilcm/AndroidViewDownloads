@@ -1,6 +1,6 @@
 package com.example.fileviewer
 
-import android.content.Intent
+import androidx.compose.foundation.clickableimport android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -152,20 +152,29 @@ fun FileBrowserScreen() {
         }
     }
 }
-
 @Composable
 fun FolderCard(
     name: String,
     isHighlighted: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+   // onClick: () -> Unit
+    onClick = {
+            //openFolder(folder)
+            Toast.makeText(context, "Clicked "+name, Toast.LENGTH_SHORT).show()
+
+        }
 ) {
-    val bgColor = if (isHighlighted) Color(0xFFA0CBE8) else Color(0xFFFAF2DA)
+	val context = LocalContext.current
+    val bgColor =
+        if (isHighlighted) Color(0xFFA0CBE8)
+        else Color(0xFFFAF2DA)
 
     Column(
         modifier = modifier
             .aspectRatio(0.9f)
             .clip(RoundedCornerShape(12.dp))
             .background(bgColor)
+            .clickable { onClick() }
             .padding(6.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
@@ -180,6 +189,7 @@ fun FolderCard(
             lineHeight = 13.sp,
             modifier = Modifier.fillMaxWidth()
         )
+
         Icon(
             imageVector = Icons.Default.Folder,
             contentDescription = null,
