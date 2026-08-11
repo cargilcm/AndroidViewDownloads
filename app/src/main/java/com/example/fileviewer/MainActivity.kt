@@ -13,10 +13,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
@@ -27,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
@@ -61,7 +65,6 @@ fun MainContent() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Reactive state to check if All Files Access is granted
     var hasStoragePermission by remember {
         mutableStateOf(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -72,7 +75,6 @@ fun MainContent() {
         )
     }
 
-    // Re-check permission automatically when user returns from Settings
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -139,8 +141,9 @@ fun FileBrowserScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+    val sharedPrefs = remember { context.getSharedPreferences("file_browser_prefs", Context.MODE_PRIVATE) }
     
+    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
     val rootDirectory = remember(folderName) {
         if (!folderName.isNullOrEmpty()) File(downloadsDir, folderName) else downloadsDir
     }
@@ -148,11 +151,16 @@ fun FileBrowserScreen(
     var currentDirectory by remember { mutableStateOf(rootDirectory) }
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
-    var sortOption by remember { mutableStateOf(SortOption.NAME_ASC) }
+    
+    // Persistent SortOption state using SharedPreferences
+    var sortOption by remember {
+        val savedOption = sharedPrefs.getString("sort_option", SortOption.NAME_ASC.name)
+        mutableStateOf(runCatching { SortOption.valueOf(savedOption!!) }.getOrDefault(SortOption.NAME_ASC))
+    }
+    
     var showSortMenu by remember { mutableStateOf(false) }
     var selectedFileForOptions by remember { mutableStateOf<File?>(null) }
 
-    // Read and divide files vs subdirectories
     val (subfolders, files) = remember(currentDirectory, searchQuery, sortOption) {
         val allContent = currentDirectory.listFiles()?.toList() ?: emptyList()
 
@@ -197,49 +205,65 @@ fun FileBrowserScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    if (isSearchActive) {
-                        TextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text("Search files...") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    } else {
-                        Text(text = currentDirectory.name.ifEmpty { "Downloads" })
-                    }
-                },
-                actions = {
-                    IconButton(onClick = {
-                        isSearchActive = !isSearchActive
-                        if (!isSearchActive) searchQuery = ""
-                    }) {
-                        Icon(
-                            imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
-                            contentDescription = "Search"
-                        )
-                    }
-                    IconButton(onClick = { showSortMenu = true }) {
-                        Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Sort Options")
-                    }
-                    DropdownMenu(
-                        expanded = showSortMenu,
-                        onDismissRequest = { showSortMenu = false }
-                    ) {
-                        SortOption.values().forEach { option ->
-                            DropdownMenuItem(
-                                text = { Text(option.label) },
-                                onClick = {
-                                    sortOption = option
-                                    showSortMenu = false
-                                }
+            Column {
+                TopAppBar(
+                    title = {
+                        if (isSearchActive) {
+                            TextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                placeholder = { Text("Search files...", style = MaterialTheme.typography.bodyMedium) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        } else {
+                            Text(
+                                text = currentDirectory.name.ifEmpty { "Downloads" },
+                                style = MaterialTheme.typography.titleMedium
                             )
                         }
+                    },
+                    actions = {
+                        IconButton(onClick = {
+                            isSearchActive = !isSearchActive
+                            if (!isSearchActive) searchQuery = ""
+                        }) {
+                            Icon(
+                                imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
+                                contentDescription = "Search"
+                            )
+                        }
+                        IconButton(onClick = { showSortMenu = true }) {
+                            Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Sort Options")
+                        }
+                        DropdownMenu(
+                            expanded = showSortMenu,
+                            onDismissRequest = { showSortMenu = false }
+                        ) {
+                            SortOption.values().forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label, style = MaterialTheme.typography.bodyMedium) },
+                                    onClick = {
+                                        sortOption = option
+                                        sharedPrefs.edit().putString("sort_option", option.name).apply()
+                                        showSortMenu = false
+                                    }
+                                )
+                            }
+                        }
                     }
-                }
-            )
+                )
+                // Breadcrumb Navigation
+                BreadcrumbBar(
+                    rootDirectory = rootDirectory,
+                    currentDirectory = currentDirectory,
+                    onDirectoryClick = { selectedDir ->
+                        searchQuery = ""
+                        isSearchActive = false
+                        currentDirectory = selectedDir
+                    }
+                )
+            }
         }
     ) { innerPadding ->
         LazyColumn(
@@ -247,7 +271,6 @@ fun FileBrowserScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Render Directories
             items(subfolders) { folder ->
                 FolderCard(
                     folder = folder,
@@ -259,7 +282,6 @@ fun FileBrowserScreen(
                 )
             }
 
-            // Render Files
             items(files) { file ->
                 FileRowItem(
                     file = file,
@@ -271,8 +293,8 @@ fun FileBrowserScreen(
         selectedFileForOptions?.let { file ->
             AlertDialog(
                 onDismissRequest = { selectedFileForOptions = null },
-                title = { Text(text = file.name) },
-                text = { Text("Select an action for this file.") },
+                title = { Text(text = file.name, style = MaterialTheme.typography.titleMedium) },
+                text = { Text("Select an action for this file.", style = MaterialTheme.typography.bodyMedium) },
                 confirmButton = {
                     TextButton(
                         onClick = {
@@ -293,6 +315,58 @@ fun FileBrowserScreen(
     }
 }
 
+@Composable
+fun BreadcrumbBar(
+    rootDirectory: File,
+    currentDirectory: File,
+    onDirectoryClick: (File) -> Unit
+) {
+    val pathSegments = remember(currentDirectory, rootDirectory) {
+        val segments = mutableListOf<File>()
+        var curr: File? = currentDirectory
+        while (curr != null) {
+            segments.add(0, curr)
+            if (curr == rootDirectory) break
+            curr = curr.parentFile
+        }
+        segments
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        pathSegments.forEachIndexed { index, file ->
+            val isLast = index == pathSegments.lastIndex
+            val displayName = if (file == rootDirectory && file.name.equals("Download", ignoreCase = true)) {
+                "Downloads"
+            } else {
+                file.name
+            }
+
+            Text(
+                text = displayName,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (isLast) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = if (isLast) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.clickable(!isLast) { onDirectoryClick(file) }
+            )
+
+            if (!isLast) {
+                Text(
+                    text = " / ",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 2.dp)
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FolderCard(
@@ -304,22 +378,25 @@ fun FolderCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .padding(horizontal = 12.dp, vertical = 2.dp)
             .combinedClickable(onClick = onClick)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = "📁", style = MaterialTheme.typography.titleLarge)
-            Spacer(modifier = Modifier.width(16.dp))
-            Column {
-                Text(text = folder.name, style = MaterialTheme.typography.titleMedium)
+            Text(text = "📁", style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = folder.name,
+                    style = MaterialTheme.typography.bodyMedium
+                )
                 Text(
                     text = "$itemCount items",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -343,7 +420,7 @@ fun FileRowItem(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .padding(horizontal = 12.dp, vertical = 2.dp)
             .combinedClickable(
                 onClick = { /* Short click action */ },
                 onLongClick = onLongClick
@@ -352,20 +429,19 @@ fun FileRowItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = getFileIcon(file), style = MaterialTheme.typography.titleLarge)
-            Spacer(modifier = Modifier.width(16.dp))
+            Text(text = getFileIcon(file), style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = file.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
                     text = "$formattedSize • $formattedDate",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -403,7 +479,6 @@ private fun openFile(context: Context, file: File) {
         val extension = file.extension.lowercase(Locale.getDefault())
         var mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
         
-        // Fallback MIME types if MimeTypeMap returns null
         if (mimeType == null) {
             mimeType = when (extension) {
                 "pdf" -> "application/pdf"
@@ -421,7 +496,6 @@ private fun openFile(context: Context, file: File) {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
-        // Always wrap in Intent.createChooser to let the user pick the target app
         val chooserIntent = Intent.createChooser(intent, "Open file with...")
         chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
