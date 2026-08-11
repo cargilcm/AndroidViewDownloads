@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun FileBrowserScreen() {
+    val context = LocalContext.current
     val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
     var items by remember { mutableStateOf<List<File>>(emptyList()) }
 
@@ -135,7 +136,7 @@ fun FileBrowserScreen() {
                                     FolderCard(
                                         name = folder.name,
                                         isHighlighted = isHighlight,
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.weight(1f),
                                         onClick = {
                                                         Toast.makeText(
                                                             context,
