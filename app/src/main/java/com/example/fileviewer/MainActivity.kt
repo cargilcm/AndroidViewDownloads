@@ -152,22 +152,35 @@ fun FileBrowserScreen(
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
     
-    // Persistent SortOption state using SharedPreferences
+    // Persistent SortOption state
     var sortOption by remember {
         val savedOption = sharedPrefs.getString("sort_option", SortOption.NAME_ASC.name)
         mutableStateOf(runCatching { SortOption.valueOf(savedOption!!) }.getOrDefault(SortOption.NAME_ASC))
     }
+
+    // Persistent Hidden Files state
+    var showHiddenFiles by remember {
+        mutableStateOf(sharedPrefs.getBoolean("show_hidden_files", false))
+    }
     
-    var showSortMenu by remember { mutableStateOf(false) }
+    var showOptionsMenu by remember { mutableStateOf(false) }
     var selectedFileForOptions by remember { mutableStateOf<File?>(null) }
 
-    val (subfolders, files) = remember(currentDirectory, searchQuery, sortOption) {
+    val (subfolders, files) = remember(currentDirectory, searchQuery, sortOption, showHiddenFiles) {
         val allContent = currentDirectory.listFiles()?.toList() ?: emptyList()
 
-        val filtered = if (searchQuery.isBlank()) {
+        // 1. Filter out hidden files if the toggle is disabled
+        val visibleContent = if (showHiddenFiles) {
             allContent
         } else {
-            allContent.filter { it.name.contains(searchQuery, ignoreCase = true) }
+            allContent.filter { !it.isHidden && !it.name.startsWith(".") }
+        }
+
+        // 2. Apply search filter
+        val filtered = if (searchQuery.isBlank()) {
+            visibleContent
+        } else {
+            visibleContent.filter { it.name.contains(searchQuery, ignoreCase = true) }
         }
 
         val dirs = filtered.filter { it.isDirectory }
@@ -233,27 +246,52 @@ fun FileBrowserScreen(
                                 contentDescription = "Search"
                             )
                         }
-                        IconButton(onClick = { showSortMenu = true }) {
-                            Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Sort Options")
+                        IconButton(onClick = { showOptionsMenu = true }) {
+                            Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Options Menu")
                         }
                         DropdownMenu(
-                            expanded = showSortMenu,
-                            onDismissRequest = { showSortMenu = false }
+                            expanded = showOptionsMenu,
+                            onDismissRequest = { showOptionsMenu = false }
                         ) {
+                            // Toggle for Hidden Files
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("Show hidden files", style = MaterialTheme.typography.bodyMedium)
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Checkbox(
+                                            checked = showHiddenFiles,
+                                            onCheckedChange = null
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    val newValue = !showHiddenFiles
+                                    showHiddenFiles = newValue
+                                    sharedPrefs.edit().putBoolean("show_hidden_files", newValue).apply()
+                                }
+                            )
+
+                            HorizontalDivider()
+
+                            // Sort options
                             SortOption.values().forEach { option ->
                                 DropdownMenuItem(
                                     text = { Text(option.label, style = MaterialTheme.typography.bodyMedium) },
                                     onClick = {
                                         sortOption = option
                                         sharedPrefs.edit().putString("sort_option", option.name).apply()
-                                        showSortMenu = false
+                                        showOptionsMenu = false
                                     }
                                 )
                             }
                         }
                     }
                 )
-                // Breadcrumb Navigation
                 BreadcrumbBar(
                     rootDirectory = rootDirectory,
                     currentDirectory = currentDirectory,
