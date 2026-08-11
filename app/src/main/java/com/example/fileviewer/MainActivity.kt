@@ -136,6 +136,13 @@ fun FileBrowserScreen() {
                                         name = folder.name,
                                         isHighlighted = isHighlight,
                                         modifier = Modifier.weight(1f)
+                                        onClick = {
+                                                        Toast.makeText(
+                                                            context,
+                                                            "Clicked ${folder.name}",
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }
                                     )
                                 } else {
                                     Spacer(modifier = Modifier.weight(1f))
@@ -158,12 +165,8 @@ fun FolderCard(
     name: String,
     isHighlighted: Boolean,
     modifier: Modifier = Modifier,
-   // onClick: () -> Unit
-    onClick = {
-            //openFolder(folder)
-            Toast.makeText(context, "Clicked "+name, Toast.LENGTH_SHORT).show()
-
-        }
+    onClick: () -> Unit
+    
 ) {
 	val context = LocalContext.current
     val bgColor =
