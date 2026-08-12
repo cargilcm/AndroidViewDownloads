@@ -430,7 +430,7 @@ fun FolderCard(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = folder.name,
-                    style = MaterialTheme.typography.bodyMedium
+                    style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
@@ -476,7 +476,7 @@ fun FileRowItem(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = file.name,
-                    style = MaterialTheme.typography.bodyMedium
+                    style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
