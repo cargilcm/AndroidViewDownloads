@@ -35,6 +35,10 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import coil.ImageLoader
+import coil.compose.AsyncImage
+import coil.decode.SvgDecoder
+import coil.request.ImageRequest
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -152,13 +156,11 @@ fun FileBrowserScreen(
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
     
-    // Persistent SortOption state
     var sortOption by remember {
         val savedOption = sharedPrefs.getString("sort_option", SortOption.NAME_ASC.name)
         mutableStateOf(runCatching { SortOption.valueOf(savedOption!!) }.getOrDefault(SortOption.NAME_ASC))
     }
 
-    // Persistent Hidden Files state
     var showHiddenFiles by remember {
         mutableStateOf(sharedPrefs.getBoolean("show_hidden_files", false))
     }
@@ -169,14 +171,12 @@ fun FileBrowserScreen(
     val (subfolders, files) = remember(currentDirectory, searchQuery, sortOption, showHiddenFiles) {
         val allContent = currentDirectory.listFiles()?.toList() ?: emptyList()
 
-        // 1. Filter out hidden files if the toggle is disabled
         val visibleContent = if (showHiddenFiles) {
             allContent
         } else {
             allContent.filter { !it.isHidden && !it.name.startsWith(".") }
         }
 
-        // 2. Apply search filter
         val filtered = if (searchQuery.isBlank()) {
             visibleContent
         } else {
@@ -253,7 +253,6 @@ fun FileBrowserScreen(
                             expanded = showOptionsMenu,
                             onDismissRequest = { showOptionsMenu = false }
                         ) {
-                            // Toggle for Hidden Files
                             DropdownMenuItem(
                                 text = {
                                     Row(
@@ -278,7 +277,6 @@ fun FileBrowserScreen(
 
                             HorizontalDivider()
 
-                            // Sort options
                             SortOption.values().forEach { option ->
                                 DropdownMenuItem(
                                     text = { Text(option.label, style = MaterialTheme.typography.bodyMedium) },
@@ -354,6 +352,34 @@ fun FileBrowserScreen(
 }
 
 @Composable
+fun FileIcon(
+    extension: String,
+    modifier: Modifier = Modifier.size(28.dp)
+) {
+    val context = LocalContext.current
+    val ext = extension.lowercase(Locale.getDefault()).ifEmpty { "page" }
+    
+    val primaryAssetPath = Uri.parse("file:///android_asset/icons/square-o/$ext.svg")
+    val fallbackAssetPath = Uri.parse("file:///android_asset/icons/square-o/page.svg")
+
+    val imageLoader = remember {
+        ImageLoader.Builder(context)
+            .components { add(SvgDecoder.Factory()) }
+            .build()
+    }
+
+    AsyncImage(
+        model = ImageRequest.Builder(context)
+            .data(primaryAssetPath)
+            .error(fallbackAssetPath)
+            .build(),
+        contentDescription = null,
+        imageLoader = imageLoader,
+        modifier = modifier
+    )
+}
+
+@Composable
 fun BreadcrumbBar(
     rootDirectory: File,
     currentDirectory: File,
@@ -425,7 +451,7 @@ fun FolderCard(
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = "📁", style = MaterialTheme.typography.titleMedium)
+            FileIcon(extension = "folder")
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -436,7 +462,7 @@ fun FolderCard(
                 Text(
                     text = "$itemCount items",
                     style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Normal, // Overrides Material 3's default Medium (500) weight
+                    fontWeight = FontWeight.Normal,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -472,7 +498,7 @@ fun FileRowItem(
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = getFileIcon(file), style = MaterialTheme.typography.titleMedium)
+            FileIcon(extension = file.extension)
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -483,7 +509,7 @@ fun FileRowItem(
                 Text(
                     text = "$formattedSize • $formattedDate",
                     style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Normal, // Overrides Material 3's default Medium (500) weight
+                    fontWeight = FontWeight.Normal,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -496,18 +522,6 @@ private fun formatFileSize(sizeInBytes: Long): String {
     val units = arrayOf("B", "KB", "MB", "GB")
     val digitGroups = (Math.log10(sizeInBytes.toDouble()) / Math.log10(1024.0)).toInt()
     return String.format(Locale.getDefault(), "%.1f %s", sizeInBytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
-}
-
-private fun getFileIcon(file: File): String {
-    return when (file.extension.lowercase()) {
-        "pdf" -> "📕"
-        "png", "jpg", "jpeg", "webp" -> "🖼️"
-        "mp3", "wav", "ogg" -> "🎵"
-        "mp4", "mkv" -> "🎬"
-        "zip", "tar", "gz" -> "📦"
-        "txt", "md" -> "📝"
-        else -> "📄"
-    }
 }
 
 private fun openFile(context: Context, file: File) {
