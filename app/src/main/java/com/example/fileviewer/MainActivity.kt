@@ -1,8 +1,5 @@
 package com.example.fileviewer
 
-import androidx.compose.layout.IntrinsicSize
-import androidx.compose.layout.aspectRatio
-import androidx.compose.ui.layout.ContentScale
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -31,6 +28,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -42,6 +40,8 @@ import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.decode.SvgDecoder
 import coil.request.ImageRequest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -149,6 +149,7 @@ fun FileBrowserScreen(
 ) {
     val context = LocalContext.current
     val sharedPrefs = remember { context.getSharedPreferences("file_browser_prefs", Context.MODE_PRIVATE) }
+    val imageLoader = rememberSvgImageLoader(context)
     
     val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
     val rootDirectory = remember(folderName) {
@@ -313,6 +314,7 @@ fun FileBrowserScreen(
             items(subfolders) { folder ->
                 FolderCard(
                     folder = folder,
+                    imageLoader = imageLoader,
                     onClick = {
                         searchQuery = ""
                         isSearchActive = false
@@ -324,6 +326,7 @@ fun FileBrowserScreen(
             items(files) { file ->
                 FileRowItem(
                     file = file,
+                    imageLoader = imageLoader,
                     onLongClick = { selectedFileForOptions = file }
                 )
             }
@@ -355,31 +358,32 @@ fun FileBrowserScreen(
 }
 
 @Composable
+fun rememberSvgImageLoader(context: Context): ImageLoader {
+    return remember(context) {
+        ImageLoader.Builder(context)
+            .components { add(SvgDecoder.Factory()) }
+            .build()
+    }
+}
+
+@Composable
 fun FileIcon(
     extension: String,
-    modifier: Modifier = Modifier
+    imageLoader: ImageLoader,
+    modifier: Modifier = Modifier.size(32.dp)
 ) {
     val context = LocalContext.current
     val ext = extension.lowercase(Locale.getDefault()).ifEmpty { "page" }
 
-    val iconPath = remember(ext) {
-        val targetPath = "icons/square-o/$ext.svg"
-        val exists = runCatching {
-            context.assets.open(targetPath).close()
-            true
-        }.getOrDefault(false)
-
-        if (exists) {
-            "file:///android_asset/$targetPath"
-        } else {
-            "file:///android_asset/icons/square-o/page.svg"
-        }
+    // Instant in-memory lookup against asset directory cache
+    val availableAssets = remember(context) {
+        context.assets.list("icons/square-o")?.toSet() ?: emptySet()
     }
 
-    val imageLoader = remember {
-        ImageLoader.Builder(context)
-            .components { add(SvgDecoder.Factory()) }
-            .build()
+    val iconPath = if (availableAssets.contains("$ext.svg")) {
+        "file:///android_asset/icons/square-o/$ext.svg"
+    } else {
+        "file:///android_asset/icons/square-o/page.svg"
     }
 
     AsyncImage(
@@ -449,10 +453,17 @@ fun BreadcrumbBar(
 @Composable
 fun FolderCard(
     folder: File,
+    imageLoader: ImageLoader,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val itemCount = folder.listFiles()?.size ?: 0
+    var itemCount by remember(folder) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(folder) {
+        withContext(Dispatchers.IO) {
+            itemCount = folder.listFiles()?.size ?: 0
+        }
+    }
+
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -462,16 +473,10 @@ fun FolderCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(IntrinsicSize.Min) // Calculates row height based on text content
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FileIcon(
-                extension = "folder",
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .aspectRatio(1f) // Matches height 1:1 without distorting
-            )
+            FileIcon(extension = "folder", imageLoader = imageLoader)
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -480,7 +485,7 @@ fun FolderCard(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "$itemCount items",
+                    text = itemCount?.let { "$it items" } ?: "...",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Normal,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -494,6 +499,7 @@ fun FolderCard(
 @Composable
 fun FileRowItem(
     file: File,
+    imageLoader: ImageLoader,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -515,16 +521,10 @@ fun FileRowItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(IntrinsicSize.Min) // Calculates row height based on text content
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FileIcon(
-                extension = file.extension,
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .aspectRatio(1f) // Matches height 1:1 without distorting
-            )
+            FileIcon(extension = file.extension, imageLoader = imageLoader)
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
