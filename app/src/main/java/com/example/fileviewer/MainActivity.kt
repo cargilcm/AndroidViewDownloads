@@ -358,9 +358,21 @@ fun FileIcon(
 ) {
     val context = LocalContext.current
     val ext = extension.lowercase(Locale.getDefault()).ifEmpty { "page" }
-    
-    val primaryAssetPath = Uri.parse("file:///android_asset/icons/square-o/$ext.svg")
-    val fallbackAssetPath = Uri.parse("file:///android_asset/icons/square-o/page.svg")
+
+    // Check if the extension icon exists in assets; fallback to page.svg if missing
+    val iconPath = remember(ext) {
+        val targetPath = "icons/square-o/$ext.svg"
+        val exists = runCatching {
+            context.assets.open(targetPath).close()
+            true
+        }.getOrDefault(false)
+
+        if (exists) {
+            "file:///android_asset/$targetPath"
+        } else {
+            "file:///android_asset/icons/square-o/page.svg"
+        }
+    }
 
     val imageLoader = remember {
         ImageLoader.Builder(context)
@@ -370,8 +382,7 @@ fun FileIcon(
 
     AsyncImage(
         model = ImageRequest.Builder(context)
-            .data(primaryAssetPath)
-            .error(fallbackAssetPath)
+            .data(iconPath)
             .build(),
         contentDescription = null,
         imageLoader = imageLoader,
