@@ -435,7 +435,8 @@ fun FolderCard(
                 )
                 Text(
                     text = "$itemCount items",
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Normal, // Overrides Material 3's default Medium (500) weight
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -481,7 +482,8 @@ fun FileRowItem(
                 )
                 Text(
                     text = "$formattedSize • $formattedDate",
-                    style = MaterialTheme.typography.labelSmall,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Normal, // Overrides Material 3's default Medium (500) weight
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
