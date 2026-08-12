@@ -1,5 +1,8 @@
 package com.example.fileviewer
 
+import androidx.compose.layout.IntrinsicSize
+import androidx.compose.layout.aspectRatio
+import androidx.compose.ui.layout.ContentScale
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -354,12 +357,11 @@ fun FileBrowserScreen(
 @Composable
 fun FileIcon(
     extension: String,
-    modifier: Modifier = Modifier.size(28.dp)
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val ext = extension.lowercase(Locale.getDefault()).ifEmpty { "page" }
 
-    // Check if the extension icon exists in assets; fallback to page.svg if missing
     val iconPath = remember(ext) {
         val targetPath = "icons/square-o/$ext.svg"
         val exists = runCatching {
@@ -386,6 +388,7 @@ fun FileIcon(
             .build(),
         contentDescription = null,
         imageLoader = imageLoader,
+        contentScale = ContentScale.Fit,
         modifier = modifier
     )
 }
@@ -459,10 +462,16 @@ fun FolderCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .height(IntrinsicSize.Min) // Calculates row height based on text content
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FileIcon(extension = "folder")
+            FileIcon(
+                extension = "folder",
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(1f) // Matches height 1:1 without distorting
+            )
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -506,10 +515,16 @@ fun FileRowItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .height(IntrinsicSize.Min) // Calculates row height based on text content
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FileIcon(extension = file.extension)
+            FileIcon(
+                extension = file.extension,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(1f) // Matches height 1:1 without distorting
+            )
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
