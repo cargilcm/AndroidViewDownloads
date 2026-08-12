@@ -4,4 +4,4 @@ a simple test app to view folders and files in my internal storage downloads fol
 
 
 # Uses:
-- file icons by [dmhendricks](https://github.com/dmhendricks/file-icon-vectors/issues)
+- file icons by [dmhendricks](https://github.com/dmhendricks/file-icon-vectors/)
