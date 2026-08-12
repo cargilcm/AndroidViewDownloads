@@ -431,6 +431,7 @@ fun FolderCard(
                 Text(
                     text = folder.name,
                     style = MaterialTheme.typography.bodyMedium
+                    fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = "$itemCount items",
@@ -476,6 +477,7 @@ fun FileRowItem(
                 Text(
                     text = file.name,
                     style = MaterialTheme.typography.bodyMedium
+                    fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = "$formattedSize • $formattedDate",
