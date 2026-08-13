@@ -47,6 +47,26 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+// Immutable UI Data Holders to avoid I/O in Composables
+data class FolderUiState(
+    val file: File,
+    val name: String,
+    val itemCount: Int
+)
+
+data class FileUiState(
+    val file: File,
+    val name: String,
+    val extension: String,
+    val formattedSize: String,
+    val formattedDate: String
+)
+
+data class DirectoryContent(
+    val folders: List<FolderUiState>,
+    val files: List<FileUiState>
+)
+
 enum class SortOption(val label: String) {
     NAME_ASC("Name (A-Z)"),
     NAME_DESC("Name (Z-A)"),
@@ -140,7 +160,6 @@ fun PermissionRequestScreen(onRequestPermission: () -> Unit) {
         }
     }
 }
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserScreen(
@@ -151,7 +170,6 @@ fun FileBrowserScreen(
     val sharedPrefs = remember { context.getSharedPreferences("file_browser_prefs", Context.MODE_PRIVATE) }
     val imageLoader = rememberSvgImageLoader(context)
 
-    // Load available asset icons ONCE for the entire screen (prevents per-item I/O)
     val availableAssets = remember(context) {
         context.assets.list("icons/square-o")?.toSet() ?: emptySet()
     }
@@ -177,13 +195,18 @@ fun FileBrowserScreen(
     var showOptionsMenu by remember { mutableStateOf(false) }
     var selectedFileForOptions by remember { mutableStateOf<File?>(null) }
 
-    // Fetch and sort directory contents on Dispatchers.IO using vararg keys
-    val fileListState by produceState<Pair<List<File>, List<File>>>(
-        initialValue = Pair(emptyList(), emptyList()),
+    // 1. Refresh state controls
+    var isRefreshing by remember { mutableStateOf(false) }
+    var refreshTrigger by rememberIntStateOf(0)
+
+    // 2. State recomputes only when directory changes, filters update, or pull-to-refresh triggers
+    val directoryContentState by produceState<DirectoryContent>(
+        initialValue = DirectoryContent(emptyList(), emptyList()),
         currentDirectory,
         searchQuery,
         sortOption,
-        showHiddenFiles
+        showHiddenFiles,
+        refreshTrigger
     ) {
         value = withContext(Dispatchers.IO) {
             val allContent = currentDirectory.listFiles()?.toList() ?: emptyList()
@@ -221,11 +244,34 @@ fun FileBrowserScreen(
                 SortOption.SIZE_SMALLEST -> nonDirs.sortedBy { it.length() }
             }
 
-            Pair(sortedDirs, sortedFiles)
+            val dateFormat = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+
+            val folderStates = sortedDirs.map { folder ->
+                FolderUiState(
+                    file = folder,
+                    name = folder.name,
+                    itemCount = folder.listFiles()?.size ?: 0
+                )
+            }
+
+            val fileStates = sortedFiles.map { file ->
+                FileUiState(
+                    file = file,
+                    name = file.name,
+                    extension = file.extension,
+                    formattedSize = formatFileSize(file.length()),
+                    formattedDate = dateFormat.format(Date(file.lastModified()))
+                )
+            }
+
+            DirectoryContent(folderStates, fileStates)
         }
+        
+        // Hide the pull-to-refresh spinner once background work completes
+        isRefreshing = false
     }
 
-    val (subfolders, files) = fileListState
+    val (subfolders, files) = directoryContentState
 
     BackHandler(enabled = currentDirectory != rootDirectory && currentDirectory.parentFile != null) {
         if (isSearchActive) {
@@ -322,37 +368,45 @@ fun FileBrowserScreen(
             }
         }
     ) { innerPadding ->
-        LazyColumn(
+        // 3. Wrap list in PullToRefreshBox
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                isRefreshing = true
+                refreshTrigger++
+            },
             modifier = modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            items(
-                items = subfolders,
-                key = { folder -> folder.absolutePath }
-            ) { folder ->
-                FolderCard(
-                    folder = folder,
-                    availableAssets = availableAssets,
-                    imageLoader = imageLoader,
-                    onClick = {
-                        searchQuery = ""
-                        isSearchActive = false
-                        currentDirectory = folder
-                    }
-                )
-            }
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(
+                    items = subfolders,
+                    key = { folderState -> folderState.file.absolutePath }
+                ) { folderState ->
+                    FolderCard(
+                        folderState = folderState,
+                        availableAssets = availableAssets,
+                        imageLoader = imageLoader,
+                        onClick = {
+                            searchQuery = ""
+                            isSearchActive = false
+                            currentDirectory = folderState.file
+                        }
+                    )
+                }
 
-            items(
-                items = files,
-                key = { file -> file.absolutePath }
-            ) { file ->
-                FileRowItem(
-                    file = file,
-                    availableAssets = availableAssets,
-                    imageLoader = imageLoader,
-                    onLongClick = { selectedFileForOptions = file }
-                )
+                items(
+                    items = files,
+                    key = { fileState -> fileState.file.absolutePath }
+                ) { fileState ->
+                    FileRowItem(
+                        fileState = fileState,
+                        availableAssets = availableAssets,
+                        imageLoader = imageLoader,
+                        onLongClick = { selectedFileForOptions = fileState.file }
+                    )
+                }
             }
         }
 
@@ -386,6 +440,7 @@ fun rememberSvgImageLoader(context: Context): ImageLoader {
     return remember(context) {
         ImageLoader.Builder(context)
             .components { add(SvgDecoder.Factory()) }
+            .crossfade(false) // Disabling crossfade prevents animation overhead during rapid scrolling
             .build()
     }
 }
@@ -472,19 +527,12 @@ fun BreadcrumbBar(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FolderCard(
-    folder: File,
+    folderState: FolderUiState,
     availableAssets: Set<String>,
     imageLoader: ImageLoader,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var itemCount by remember(folder) { mutableStateOf<Int?>(null) }
-    LaunchedEffect(folder) {
-        withContext(Dispatchers.IO) {
-            itemCount = folder.listFiles()?.size ?: 0
-        }
-    }
-
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -505,12 +553,12 @@ fun FolderCard(
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = folder.name,
+                    text = folderState.name,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = itemCount?.let { "$it items" } ?: "...",
+                    text = "${folderState.itemCount} items",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Normal,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -523,17 +571,12 @@ fun FolderCard(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FileRowItem(
-    file: File,
+    fileState: FileUiState,
     availableAssets: Set<String>,
     imageLoader: ImageLoader,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val formattedSize = remember(file) { formatFileSize(file.length()) }
-    val formattedDate = remember(file) {
-        SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault()).format(Date(file.lastModified()))
-    }
-
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         modifier = modifier
@@ -551,19 +594,19 @@ fun FileRowItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             FileIcon(
-                extension = file.extension,
+                extension = fileState.extension,
                 availableAssets = availableAssets,
                 imageLoader = imageLoader
             )
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = file.name,
+                    text = fileState.name,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "$formattedSize • $formattedDate",
+                    text = "${fileState.formattedSize} • ${fileState.formattedDate}",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Normal,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
