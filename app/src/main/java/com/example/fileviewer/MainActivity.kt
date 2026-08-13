@@ -351,85 +351,100 @@ fun FileBrowserScreen(
     var refreshTrigger by remember { mutableStateOf(0) }
 
     // Offload item gathering for standard File AND SAF DocumentFile to Dispatchers.IO
-    val directoryContentState by produceState<DirectoryContent>(
-        initialValue = DirectoryContent(emptyList(), emptyList()),
-        currentNode,
-        searchQuery,
-        sortOption,
-        showHiddenFiles,
-        refreshTrigger
-    ) {
-        value = withContext(Dispatchers.IO) {
-            val children: List<StorageNode> = when (currentNode) {
-                is StorageNode.LocalFileNode -> {
-                    currentNode.file.listFiles()?.map { StorageNode.LocalFileNode(it) } ?: emptyList()
+    // Offload item gathering and sorting for both standard Files and SAF DocumentFiles to Dispatchers.IO
+        val directoryContentState by produceState<DirectoryContent>(
+            initialValue = DirectoryContent(emptyList(), emptyList()),
+            currentNode,
+            searchQuery,
+            sortOption,
+            showHiddenFiles,
+            refreshTrigger
+        ) {
+            value = withContext(Dispatchers.IO) {
+                val children: List<StorageNode> = when (currentNode) {
+                    is StorageNode.LocalFileNode -> {
+                        currentNode.file.listFiles()?.map { StorageNode.LocalFileNode(it) } ?: emptyList()
+                    }
+                    is StorageNode.SafNode -> {
+                        currentNode.document.listFiles().map { StorageNode.SafNode(it) }
+                    }
                 }
-                is StorageNode.SafNode -> {
-                    currentNode.document.listFiles().map { StorageNode.SafNode(it) }
+    
+                val visibleContent = if (showHiddenFiles) {
+                    children
+                } else {
+                    children.filter { !it.name.startsWith(".") }
                 }
-            }
-
-            val visibleContent = if (showHiddenFiles) {
-                children
-            } else {
-                children.filter { !it.name.startsWith(".") }
-            }
-
-            val filtered = if (searchQuery.isBlank()) {
-                visibleContent
-            } else {
-                visibleContent.filter { it.name.contains(searchQuery, ignoreCase = true) }
-            }
-
-            val dirs = filtered.filter { it.isDirectory }
-            val files = filtered.filter { !it.isDirectory }
-
-            val sortedDirs = when (sortOption) {
-                SortOption.NAME_ASC -> dirs.sortedBy { it.name.lowercase() }
-                SortOption.NAME_DESC -> dirs.sortedByDescending { it.name.lowercase() }
-                else -> dirs.sortedBy { it.name.lowercase() }
-            }
-
-            val sortedFiles = when (sortOption) {
-                SortOption.NAME_ASC -> files.sortedBy { it.name.lowercase() }
-                SortOption.NAME_DESC -> files.sortedByDescending { it.name.lowercase() }
-                else -> files.sortedBy { it.name.lowercase() }
-            }
-
-            val dateFormat = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
-
-            val folderStates = sortedDirs.map { dirNode ->
-                val count = when (dirNode) {
-                    is StorageNode.LocalFileNode -> dirNode.file.listFiles()?.size ?: 0
-                    is StorageNode.SafNode -> dirNode.document.listFiles().size
+    
+                val filtered = if (searchQuery.isBlank()) {
+                    visibleContent
+                } else {
+                    visibleContent.filter { it.name.contains(searchQuery, ignoreCase = true) }
                 }
-                FolderUiState(dirNode, dirNode.name, count)
-            }
-
-            val fileStates = sortedFiles.map { fileNode ->
-                val extension = fileNode.name.substringAfterLast('.', "")
-                val size = when (fileNode) {
-                    is StorageNode.LocalFileNode -> fileNode.file.length()
-                    is StorageNode.SafNode -> fileNode.document.length()
+    
+                val dirs = filtered.filter { it.isDirectory }
+                val files = filtered.filter { !it.isDirectory }
+    
+                // Helper functions for extracting metadata across Node types
+                fun getNodeLastModified(node: StorageNode): Long = when (node) {
+                    is StorageNode.LocalFileNode -> node.file.lastModified()
+                    is StorageNode.SafNode -> node.document.lastModified()
                 }
-                val lastMod = when (fileNode) {
-                    is StorageNode.LocalFileNode -> fileNode.file.lastModified()
-                    is StorageNode.SafNode -> fileNode.document.lastModified()
+    
+                fun getNodeSize(node: StorageNode): Long = when (node) {
+                    is StorageNode.LocalFileNode -> node.file.length()
+                    is StorageNode.SafNode -> node.document.length()
                 }
-
-                FileUiState(
-                    node = fileNode,
-                    name = fileNode.name,
-                    extension = extension,
-                    formattedSize = formatFileSize(size),
-                    formattedDate = dateFormat.format(Date(lastMod))
-                )
+    
+                fun getFolderItemCount(node: StorageNode): Int = when (node) {
+                    is StorageNode.LocalFileNode -> node.file.listFiles()?.size ?: 0
+                    is StorageNode.SafNode -> node.document.listFiles().size
+                }
+    
+                // --- Fixed Directory Sorting ---
+                val sortedDirs = when (sortOption) {
+                    SortOption.NAME_ASC -> dirs.sortedBy { it.name.lowercase() }
+                    SortOption.NAME_DESC -> dirs.sortedByDescending { it.name.lowercase() }
+                    SortOption.DATE_NEWEST -> dirs.sortedByDescending { getNodeLastModified(it) }
+                    SortOption.DATE_OLDEST -> dirs.sortedBy { getNodeLastModified(it) }
+                    SortOption.SIZE_LARGEST -> dirs.sortedByDescending { getFolderItemCount(it) }
+                    SortOption.SIZE_SMALLEST -> dirs.sortedBy { getFolderItemCount(it) }
+                }
+    
+                // --- Fixed File Sorting ---
+                val sortedFiles = when (sortOption) {
+                    SortOption.NAME_ASC -> files.sortedBy { it.name.lowercase() }
+                    SortOption.NAME_DESC -> files.sortedByDescending { it.name.lowercase() }
+                    SortOption.DATE_NEWEST -> files.sortedByDescending { getNodeLastModified(it) }
+                    SortOption.DATE_OLDEST -> files.sortedBy { getNodeLastModified(it) }
+                    SortOption.SIZE_LARGEST -> files.sortedByDescending { getNodeSize(it) }
+                    SortOption.SIZE_SMALLEST -> files.sortedBy { getNodeSize(it) }
+                }
+    
+                val dateFormat = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
+    
+                val folderStates = sortedDirs.map { dirNode ->
+                    FolderUiState(dirNode, dirNode.name, getFolderItemCount(dirNode))
+                }
+    
+                val fileStates = sortedFiles.map { fileNode ->
+                    val extension = fileNode.name.substringAfterLast('.', "")
+                    val size = getNodeSize(fileNode)
+                    val lastMod = getNodeLastModified(fileNode)
+    
+                    FileUiState(
+                        node = fileNode,
+                        name = fileNode.name,
+                        extension = extension,
+                        formattedSize = formatFileSize(size),
+                        formattedDate = dateFormat.format(Date(lastMod))
+                    )
+                }
+    
+                DirectoryContent(folderStates, fileStates)
             }
-
-            DirectoryContent(folderStates, fileStates)
+            isRefreshing = false
         }
-        isRefreshing = false
-    }
 
     val (subfolders, files) = directoryContentState
 
