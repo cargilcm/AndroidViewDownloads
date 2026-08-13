@@ -150,8 +150,8 @@ fun FileBrowserScreen(
     val context = LocalContext.current
     val sharedPrefs = remember { context.getSharedPreferences("file_browser_prefs", Context.MODE_PRIVATE) }
     val imageLoader = rememberSvgImageLoader(context)
-    
-    // 1. Read asset listing ONCE for the whole screen
+
+    // Load available asset icons ONCE for the entire screen (prevents per-item I/O)
     val availableAssets = remember(context) {
         context.assets.list("icons/square-o")?.toSet() ?: emptySet()
     }
@@ -164,7 +164,7 @@ fun FileBrowserScreen(
     var currentDirectory by remember { mutableStateOf(rootDirectory) }
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
-    
+
     var sortOption by remember {
         val savedOption = sharedPrefs.getString("sort_option", SortOption.NAME_ASC.name)
         mutableStateOf(runCatching { SortOption.valueOf(savedOption!!) }.getOrDefault(SortOption.NAME_ASC))
@@ -174,13 +174,16 @@ fun FileBrowserScreen(
         mutableStateOf(sharedPrefs.getBoolean("show_hidden_files", false))
     }
 
-    // 2. Offload file fetching and sorting to Dispatchers.IO
-    val fileListState by produceState(
-        initialValue = Pair(emptyList<File>(), emptyList<File>()),
-        key1 = currentDirectory,
-        key2 = searchQuery,
-        key3 = sortOption,
-        key4 = showHiddenFiles
+    var showOptionsMenu by remember { mutableStateOf(false) }
+    var selectedFileForOptions by remember { mutableStateOf<File?>(null) }
+
+    // Fetch and sort directory contents on Dispatchers.IO using vararg keys
+    val fileListState by produceState<Pair<List<File>, List<File>>>(
+        initialValue = Pair(emptyList(), emptyList()),
+        currentDirectory,
+        searchQuery,
+        sortOption,
+        showHiddenFiles
     ) {
         value = withContext(Dispatchers.IO) {
             val allContent = currentDirectory.listFiles()?.toList() ?: emptyList()
@@ -224,39 +227,155 @@ fun FileBrowserScreen(
 
     val (subfolders, files) = fileListState
 
-    /* TopBar / Scaffold setup unchanged ... */
+    BackHandler(enabled = currentDirectory != rootDirectory && currentDirectory.parentFile != null) {
+        if (isSearchActive) {
+            isSearchActive = false
+            searchQuery = ""
+        } else {
+            currentDirectory = currentDirectory.parentFile!!
+        }
+    }
 
-    LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(innerPadding)
-    ) {
-        // 3. Keys prevent recalculating existing items during scroll
-        items(
-            items = subfolders,
-            key = { folder -> folder.absolutePath }
-        ) { folder ->
-            FolderCard(
-                folder = folder,
-                availableAssets = availableAssets,
-                imageLoader = imageLoader,
-                onClick = {
-                    searchQuery = ""
-                    isSearchActive = false
-                    currentDirectory = folder
-                }
-            )
+    Scaffold(
+        topBar = {
+            Column {
+                TopAppBar(
+                    title = {
+                        if (isSearchActive) {
+                            TextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                placeholder = { Text("Search files...", style = MaterialTheme.typography.bodyMedium) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        } else {
+                            Text(
+                                text = currentDirectory.name.ifEmpty { "Downloads" },
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = {
+                            isSearchActive = !isSearchActive
+                            if (!isSearchActive) searchQuery = ""
+                        }) {
+                            Icon(
+                                imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
+                                contentDescription = "Search"
+                            )
+                        }
+                        IconButton(onClick = { showOptionsMenu = true }) {
+                            Icon(imageVector = Icons.Default.MoreVert, contentDescription = "Options Menu")
+                        }
+                        DropdownMenu(
+                            expanded = showOptionsMenu,
+                            onDismissRequest = { showOptionsMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("Show hidden files", style = MaterialTheme.typography.bodyMedium)
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Checkbox(
+                                            checked = showHiddenFiles,
+                                            onCheckedChange = null
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    val newValue = !showHiddenFiles
+                                    showHiddenFiles = newValue
+                                    sharedPrefs.edit().putBoolean("show_hidden_files", newValue).apply()
+                                }
+                            )
+
+                            HorizontalDivider()
+
+                            SortOption.values().forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label, style = MaterialTheme.typography.bodyMedium) },
+                                    onClick = {
+                                        sortOption = option
+                                        sharedPrefs.edit().putString("sort_option", option.name).apply()
+                                        showOptionsMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                )
+                BreadcrumbBar(
+                    rootDirectory = rootDirectory,
+                    currentDirectory = currentDirectory,
+                    onDirectoryClick = { selectedDir ->
+                        searchQuery = ""
+                        isSearchActive = false
+                        currentDirectory = selectedDir
+                    }
+                )
+            }
+        }
+    ) { innerPadding ->
+        LazyColumn(
+            modifier = modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            items(
+                items = subfolders,
+                key = { folder -> folder.absolutePath }
+            ) { folder ->
+                FolderCard(
+                    folder = folder,
+                    availableAssets = availableAssets,
+                    imageLoader = imageLoader,
+                    onClick = {
+                        searchQuery = ""
+                        isSearchActive = false
+                        currentDirectory = folder
+                    }
+                )
+            }
+
+            items(
+                items = files,
+                key = { file -> file.absolutePath }
+            ) { file ->
+                FileRowItem(
+                    file = file,
+                    availableAssets = availableAssets,
+                    imageLoader = imageLoader,
+                    onLongClick = { selectedFileForOptions = file }
+                )
+            }
         }
 
-        items(
-            items = files,
-            key = { file -> file.absolutePath }
-        ) { file ->
-            FileRowItem(
-                file = file,
-                availableAssets = availableAssets,
-                imageLoader = imageLoader,
-                onLongClick = { selectedFileForOptions = file }
+        selectedFileForOptions?.let { file ->
+            AlertDialog(
+                onDismissRequest = { selectedFileForOptions = null },
+                title = { Text(text = file.name, style = MaterialTheme.typography.titleMedium) },
+                text = { Text("Select an action for this file.", style = MaterialTheme.typography.bodyMedium) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            openFile(context, file)
+                            selectedFileForOptions = null
+                        }
+                    ) {
+                        Text("Open External Viewer")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { selectedFileForOptions = null }) {
+                        Text("Cancel")
+                    }
+                }
             )
         }
     }
@@ -281,7 +400,6 @@ fun FileIcon(
     val context = LocalContext.current
     val ext = extension.lowercase(Locale.getDefault()).ifEmpty { "page" }
 
-    // Instant O(1) in-memory check without any disk I/O
     val iconPath = if (availableAssets.contains("$ext.svg")) {
         "file:///android_asset/icons/square-o/$ext.svg"
     } else {
@@ -355,8 +473,8 @@ fun BreadcrumbBar(
 @Composable
 fun FolderCard(
     folder: File,
-    imageLoader: ImageLoader,
     availableAssets: Set<String>,
+    imageLoader: ImageLoader,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -379,7 +497,11 @@ fun FolderCard(
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FileIcon(extension = "folder", availableAssets = availableAssets, imageLoader = imageLoader)
+            FileIcon(
+                extension = "folder",
+                availableAssets = availableAssets,
+                imageLoader = imageLoader
+            )
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -402,8 +524,8 @@ fun FolderCard(
 @Composable
 fun FileRowItem(
     file: File,
-    imageLoader: ImageLoader,
     availableAssets: Set<String>,
+    imageLoader: ImageLoader,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -428,7 +550,11 @@ fun FileRowItem(
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            FileIcon(extension = file.extension, availableAssets = availableAssets, imageLoader = imageLoader)
+            FileIcon(
+                extension = file.extension,
+                availableAssets = availableAssets,
+                imageLoader = imageLoader
+            )
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -464,7 +590,7 @@ private fun openFile(context: Context, file: File) {
 
         val extension = file.extension.lowercase(Locale.getDefault())
         var mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
-        
+
         if (mimeType == null) {
             mimeType = when (extension) {
                 "pdf" -> "application/pdf"
