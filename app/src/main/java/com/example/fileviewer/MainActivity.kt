@@ -1,5 +1,7 @@
 package com.example.fileviewer
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -174,23 +176,18 @@ fun AppNavigation() {
         Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
     }
 
-    val termuxTreeUri = remember {
-        // Termux DocumentsProvider authority authority URI
-        Uri.parse("content://com.termux.documents/tree/home")
-    }
-
     when (val screen = currentScreen) {
         is AppScreen.Home -> {
             HomeScreen(
                 onSelectDownloads = {
                     currentScreen = AppScreen.Browser(StorageNode.LocalFileNode(downloadsDir))
                 },
-                onSelectTermux = {
-                    val termuxDoc = DocumentFile.fromTreeUri(context, termuxTreeUri)
+                onSelectTermux = { grantedUri ->
+                    val termuxDoc = DocumentFile.fromTreeUri(context, grantedUri)
                     if (termuxDoc != null && termuxDoc.exists()) {
                         currentScreen = AppScreen.Browser(StorageNode.SafNode(termuxDoc, "Termux Home"))
                     } else {
-                        Toast.makeText(context, "Termux DocumentsProvider unavailable or not installed.", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, "Cannot access selected directory", Toast.LENGTH_SHORT).show()
                     }
                 }
             )
@@ -208,8 +205,30 @@ fun AppNavigation() {
 @Composable
 fun HomeScreen(
     onSelectDownloads: () -> Unit,
-    onSelectTermux: () -> Unit
+    onSelectTermux: (Uri) -> Unit
 ) {
+    val context = LocalContext.current
+    val sharedPrefs = remember { context.getSharedPreferences("file_browser_prefs", Context.MODE_PRIVATE) }
+
+    // Launcher to handle the SAF system folder picker
+    val safPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            // Take persistent read/write permissions so the user doesn't have to select it every time!
+            val takeFlags: Int = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+                // Save Uri string to SharedPreferences for future launches
+                sharedPrefs.edit().putString("termux_tree_uri", uri.toString()).apply()
+                
+                onSelectTermux(uri)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Failed to persist permission: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -230,6 +249,7 @@ fun HomeScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            // Downloads Card
             Card(
                 onClick = onSelectDownloads,
                 modifier = Modifier.fillMaxWidth()
@@ -252,8 +272,25 @@ fun HomeScreen(
                 }
             }
 
+            // Termux Card
             Card(
-                onClick = onSelectTermux,
+                onClick = {
+                    val savedUriString = sharedPrefs.getString("termux_tree_uri", null)
+                    val savedUri = savedUriString?.let { Uri.parse(it) }
+
+                    // Check if we already have valid persisted permissions
+                    val hasPermission = savedUri != null && context.contentResolver.persistedUriPermissions.any { 
+                        it.uri == savedUri && it.isReadPermission 
+                    }
+
+                    if (hasPermission && savedUri != null) {
+                        onSelectTermux(savedUri)
+                    } else {
+                        // Launch system picker to let user grant access to Termux directory once
+                        Toast.makeText(context, "Select Termux folder in system picker", Toast.LENGTH_LONG).show()
+                        safPickerLauncher.launch(null)
+                    }
+                },
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
@@ -269,7 +306,7 @@ fun HomeScreen(
                     Spacer(modifier = Modifier.width(16.dp))
                     Column {
                         Text("Termux Storage", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text("com.termux.documents provider filesystem", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Open via SAF Document Provider", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
