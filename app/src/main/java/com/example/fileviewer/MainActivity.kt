@@ -1,12 +1,12 @@
 package com.example.fileviewer
 
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.webkit.MimeTypeMap
 import android.widget.Toast
@@ -23,9 +23,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +39,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import coil.ImageLoader
@@ -48,15 +53,39 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// Immutable UI Data Holders to avoid I/O in Composables
+// --- Navigation & Storage Abstractions ---
+
+sealed class AppScreen {
+    object Home : AppScreen()
+    data class Browser(val rootNode: StorageNode) : AppScreen()
+}
+
+sealed class StorageNode {
+    abstract val name: String
+    abstract val key: String
+    abstract val isDirectory: Boolean
+    
+    data class LocalFileNode(val file: File) : StorageNode() {
+        override val name: String get() = file.name.ifEmpty { "Downloads" }
+        override val key: String get() = file.absolutePath
+        override val isDirectory: Boolean get() = file.isDirectory
+    }
+
+    data class SafNode(val document: DocumentFile, val customName: String? = null) : StorageNode() {
+        override val name: String get() = customName ?: document.name ?: "Termux"
+        override val key: String get() = document.uri.toString()
+        override val isDirectory: Boolean get() = document.isDirectory
+    }
+}
+
 data class FolderUiState(
-    val file: File,
+    val node: StorageNode,
     val name: String,
     val itemCount: Int
 )
 
 data class FileUiState(
-    val file: File,
+    val node: StorageNode,
     val name: String,
     val extension: String,
     val formattedSize: String,
@@ -132,39 +161,127 @@ fun MainContent() {
             }
         )
     } else {
-        FileBrowserScreen()
+        AppNavigation()
     }
 }
 
 @Composable
-fun PermissionRequestScreen(onRequestPermission: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = "Storage Permission Required",
-                style = MaterialTheme.typography.headlineSmall
+fun AppNavigation() {
+    val context = LocalContext.current
+    var currentScreen by remember { mutableStateOf<AppScreen>(AppScreen.Home) }
+
+    val downloadsDir = remember {
+        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+    }
+
+    val termuxTreeUri = remember {
+        // Termux DocumentsProvider authority authority URI
+        Uri.parse("content://com.termux.documents/tree/home")
+    }
+
+    when (val screen = currentScreen) {
+        is AppScreen.Home -> {
+            HomeScreen(
+                onSelectDownloads = {
+                    currentScreen = AppScreen.Browser(StorageNode.LocalFileNode(downloadsDir))
+                },
+                onSelectTermux = {
+                    val termuxDoc = DocumentFile.fromTreeUri(context, termuxTreeUri)
+                    if (termuxDoc != null && termuxDoc.exists()) {
+                        currentScreen = AppScreen.Browser(StorageNode.SafNode(termuxDoc, "Termux Home"))
+                    } else {
+                        Toast.makeText(context, "Termux DocumentsProvider unavailable or not installed.", Toast.LENGTH_LONG).show()
+                    }
+                }
             )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "All Files Access is required to read and list files from public external storage directories.",
-                style = MaterialTheme.typography.bodyMedium
+        }
+        is AppScreen.Browser -> {
+            FileBrowserScreen(
+                initialNode = screen.rootNode,
+                onGoHome = { currentScreen = AppScreen.Home }
             )
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = onRequestPermission) {
-                Text("Grant Permission in Settings")
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeScreen(
+    onSelectDownloads: () -> Unit,
+    onSelectTermux: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("File Explorer Home", style = MaterialTheme.typography.titleLarge) }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "Select Storage Location",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Card(
+                onClick = onSelectDownloads,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = "Downloads",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(40.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column {
+                        Text("Downloads", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("Public external downloads storage", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+
+            Card(
+                onClick = onSelectTermux,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Terminal,
+                        contentDescription = "Termux",
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(40.dp)
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column {
+                        Text("Termux Storage", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text("com.termux.documents provider filesystem", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
         }
     }
 }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserScreen(
-    folderName: String? = null,
+    initialNode: StorageNode,
+    onGoHome: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -175,12 +292,9 @@ fun FileBrowserScreen(
         context.assets.list("icons/square-o")?.toSet() ?: emptySet()
     }
 
-    val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-    val rootDirectory = remember(folderName) {
-        if (!folderName.isNullOrEmpty()) File(downloadsDir, folderName) else downloadsDir
-    }
+    val rootNodeHistory = remember { mutableStateListOf(initialNode) }
+    val currentNode = rootNodeHistory.last()
 
-    var currentDirectory by remember { mutableStateOf(rootDirectory) }
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
 
@@ -194,27 +308,34 @@ fun FileBrowserScreen(
     }
 
     var showOptionsMenu by remember { mutableStateOf(false) }
-    var selectedFileForOptions by remember { mutableStateOf<File?>(null) }
+    var selectedFileForOptions by remember { mutableStateOf<StorageNode?>(null) }
 
-    // 1. Fixed: Standard mutableStateOf / mutableIntStateOf initialization
     var isRefreshing by remember { mutableStateOf(false) }
     var refreshTrigger by remember { mutableStateOf(0) }
 
+    // Offload item gathering for standard File AND SAF DocumentFile to Dispatchers.IO
     val directoryContentState by produceState<DirectoryContent>(
         initialValue = DirectoryContent(emptyList(), emptyList()),
-        currentDirectory,
+        currentNode,
         searchQuery,
         sortOption,
         showHiddenFiles,
         refreshTrigger
     ) {
         value = withContext(Dispatchers.IO) {
-            val allContent = currentDirectory.listFiles()?.toList() ?: emptyList()
+            val children: List<StorageNode> = when (currentNode) {
+                is StorageNode.LocalFileNode -> {
+                    currentNode.file.listFiles()?.map { StorageNode.LocalFileNode(it) } ?: emptyList()
+                }
+                is StorageNode.SafNode -> {
+                    currentNode.document.listFiles().map { StorageNode.SafNode(it) }
+                }
+            }
 
             val visibleContent = if (showHiddenFiles) {
-                allContent
+                children
             } else {
-                allContent.filter { !it.isHidden && !it.name.startsWith(".") }
+                children.filter { !it.name.startsWith(".") }
             }
 
             val filtered = if (searchQuery.isBlank()) {
@@ -224,60 +345,65 @@ fun FileBrowserScreen(
             }
 
             val dirs = filtered.filter { it.isDirectory }
-            val nonDirs = filtered.filter { it.isFile }
+            val files = filtered.filter { !it.isDirectory }
 
             val sortedDirs = when (sortOption) {
                 SortOption.NAME_ASC -> dirs.sortedBy { it.name.lowercase() }
                 SortOption.NAME_DESC -> dirs.sortedByDescending { it.name.lowercase() }
-                SortOption.DATE_NEWEST -> dirs.sortedByDescending { it.lastModified() }
-                SortOption.DATE_OLDEST -> dirs.sortedBy { it.lastModified() }
-                SortOption.SIZE_LARGEST -> dirs.sortedByDescending { it.listFiles()?.size ?: 0 }
-                SortOption.SIZE_SMALLEST -> dirs.sortedBy { it.listFiles()?.size ?: 0 }
+                else -> dirs.sortedBy { it.name.lowercase() }
             }
 
             val sortedFiles = when (sortOption) {
-                SortOption.NAME_ASC -> nonDirs.sortedBy { it.name.lowercase() }
-                SortOption.NAME_DESC -> nonDirs.sortedByDescending { it.name.lowercase() }
-                SortOption.DATE_NEWEST -> nonDirs.sortedByDescending { it.lastModified() }
-                SortOption.DATE_OLDEST -> nonDirs.sortedBy { it.lastModified() }
-                SortOption.SIZE_LARGEST -> nonDirs.sortedByDescending { it.length() }
-                SortOption.SIZE_SMALLEST -> nonDirs.sortedBy { it.length() }
+                SortOption.NAME_ASC -> files.sortedBy { it.name.lowercase() }
+                SortOption.NAME_DESC -> files.sortedByDescending { it.name.lowercase() }
+                else -> files.sortedBy { it.name.lowercase() }
             }
 
             val dateFormat = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault())
 
-            val folderStates = sortedDirs.map { folder ->
-                FolderUiState(
-                    file = folder,
-                    name = folder.name,
-                    itemCount = folder.listFiles()?.size ?: 0
-                )
+            val folderStates = sortedDirs.map { dirNode ->
+                val count = when (dirNode) {
+                    is StorageNode.LocalFileNode -> dirNode.file.listFiles()?.size ?: 0
+                    is StorageNode.SafNode -> dirNode.document.listFiles().size
+                }
+                FolderUiState(dirNode, dirNode.name, count)
             }
 
-            val fileStates = sortedFiles.map { file ->
+            val fileStates = sortedFiles.map { fileNode ->
+                val extension = fileNode.name.substringAfterLast('.', "")
+                val size = when (fileNode) {
+                    is StorageNode.LocalFileNode -> fileNode.file.length()
+                    is StorageNode.SafNode -> fileNode.document.length()
+                }
+                val lastMod = when (fileNode) {
+                    is StorageNode.LocalFileNode -> fileNode.file.lastModified()
+                    is StorageNode.SafNode -> fileNode.document.lastModified()
+                }
+
                 FileUiState(
-                    file = file,
-                    name = file.name,
-                    extension = file.extension,
-                    formattedSize = formatFileSize(file.length()),
-                    formattedDate = dateFormat.format(Date(file.lastModified()))
+                    node = fileNode,
+                    name = fileNode.name,
+                    extension = extension,
+                    formattedSize = formatFileSize(size),
+                    formattedDate = dateFormat.format(Date(lastMod))
                 )
             }
 
             DirectoryContent(folderStates, fileStates)
         }
-
         isRefreshing = false
     }
 
     val (subfolders, files) = directoryContentState
 
-    BackHandler(enabled = currentDirectory != rootDirectory && currentDirectory.parentFile != null) {
+    BackHandler(enabled = true) {
         if (isSearchActive) {
             isSearchActive = false
             searchQuery = ""
+        } else if (rootNodeHistory.size > 1) {
+            rootNodeHistory.removeAt(rootNodeHistory.lastIndex)
         } else {
-            currentDirectory = currentDirectory.parentFile!!
+            onGoHome()
         }
     }
 
@@ -285,6 +411,11 @@ fun FileBrowserScreen(
         topBar = {
             Column {
                 TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = onGoHome) {
+                            Icon(imageVector = Icons.Default.Home, contentDescription = "Home")
+                        }
+                    },
                     title = {
                         if (isSearchActive) {
                             TextField(
@@ -296,7 +427,7 @@ fun FileBrowserScreen(
                             )
                         } else {
                             Text(
-                                text = currentDirectory.name.ifEmpty { "Downloads" },
+                                text = currentNode.name,
                                 style = MaterialTheme.typography.titleMedium
                             )
                         }
@@ -327,10 +458,7 @@ fun FileBrowserScreen(
                                     ) {
                                         Text("Show hidden files", style = MaterialTheme.typography.bodyMedium)
                                         Spacer(modifier = Modifier.width(12.dp))
-                                        Checkbox(
-                                            checked = showHiddenFiles,
-                                            onCheckedChange = null
-                                        )
+                                        Checkbox(checked = showHiddenFiles, onCheckedChange = null)
                                     }
                                 },
                                 onClick = {
@@ -356,12 +484,13 @@ fun FileBrowserScreen(
                     }
                 )
                 BreadcrumbBar(
-                    rootDirectory = rootDirectory,
-                    currentDirectory = currentDirectory,
-                    onDirectoryClick = { selectedDir ->
+                    nodeHistory = rootNodeHistory,
+                    onNodeClick = { targetIndex ->
                         searchQuery = ""
                         isSearchActive = false
-                        currentDirectory = selectedDir
+                        while (rootNodeHistory.size > targetIndex + 1) {
+                            rootNodeHistory.removeAt(rootNodeHistory.lastIndex)
+                        }
                     }
                 )
             }
@@ -371,7 +500,6 @@ fun FileBrowserScreen(
             isRefreshing = isRefreshing,
             onRefresh = {
                 isRefreshing = true
-                // 2. Fixed: Avoid '++' operator ambiguity on delegated Compose state properties
                 refreshTrigger += 1
             },
             modifier = modifier
@@ -381,7 +509,7 @@ fun FileBrowserScreen(
             LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(
                     items = subfolders,
-                    key = { folderState -> folderState.file.absolutePath }
+                    key = { folderState -> folderState.node.key }
                 ) { folderState ->
                     FolderCard(
                         folderState = folderState,
@@ -390,34 +518,34 @@ fun FileBrowserScreen(
                         onClick = {
                             searchQuery = ""
                             isSearchActive = false
-                            currentDirectory = folderState.file
+                            rootNodeHistory.add(folderState.node)
                         }
                     )
                 }
 
                 items(
                     items = files,
-                    key = { fileState -> fileState.file.absolutePath }
+                    key = { fileState -> fileState.node.key }
                 ) { fileState ->
                     FileRowItem(
                         fileState = fileState,
                         availableAssets = availableAssets,
                         imageLoader = imageLoader,
-                        onLongClick = { selectedFileForOptions = fileState.file }
+                        onLongClick = { selectedFileForOptions = fileState.node }
                     )
                 }
             }
         }
 
-        selectedFileForOptions?.let { file ->
+        selectedFileForOptions?.let { node ->
             AlertDialog(
                 onDismissRequest = { selectedFileForOptions = null },
-                title = { Text(text = file.name, style = MaterialTheme.typography.titleMedium) },
+                title = { Text(text = node.name, style = MaterialTheme.typography.titleMedium) },
                 text = { Text("Select an action for this file.", style = MaterialTheme.typography.bodyMedium) },
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            openFile(context, file)
+                            openStorageNode(context, node)
                             selectedFileForOptions = null
                         }
                     ) {
@@ -434,13 +562,47 @@ fun FileBrowserScreen(
     }
 }
 
+@Composable
+fun BreadcrumbBar(
+    nodeHistory: List<StorageNode>,
+    onNodeClick: (Int) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        nodeHistory.forEachIndexed { index, node ->
+            val isLast = index == nodeHistory.lastIndex
+
+            Text(
+                text = node.name,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (isLast) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = if (isLast) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.clickable(!isLast) { onNodeClick(index) }
+            )
+
+            if (!isLast) {
+                Text(
+                    text = " / ",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 2.dp)
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun rememberSvgImageLoader(context: Context): ImageLoader {
     return remember(context) {
         ImageLoader.Builder(context)
             .components { add(SvgDecoder.Factory()) }
-            .crossfade(false) // Disabling crossfade prevents animation overhead during rapid scrolling
+            .crossfade(false)
             .build()
     }
 }
@@ -470,58 +632,6 @@ fun FileIcon(
         contentScale = ContentScale.Fit,
         modifier = modifier
     )
-}
-
-@Composable
-fun BreadcrumbBar(
-    rootDirectory: File,
-    currentDirectory: File,
-    onDirectoryClick: (File) -> Unit
-) {
-    val pathSegments = remember(currentDirectory, rootDirectory) {
-        val segments = mutableListOf<File>()
-        var curr: File? = currentDirectory
-        while (curr != null) {
-            segments.add(0, curr)
-            if (curr == rootDirectory) break
-            curr = curr.parentFile
-        }
-        segments
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        pathSegments.forEachIndexed { index, file ->
-            val isLast = index == pathSegments.lastIndex
-            val displayName = if (file == rootDirectory && file.name.equals("Download", ignoreCase = true)) {
-                "Downloads"
-            } else {
-                file.name
-            }
-
-            Text(
-                text = displayName,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (isLast) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = if (isLast) FontWeight.Bold else FontWeight.Normal,
-                modifier = Modifier.clickable(!isLast) { onDirectoryClick(file) }
-            )
-
-            if (!isLast) {
-                Text(
-                    text = " / ",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 2.dp)
-                )
-            }
-        }
-    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -616,6 +726,32 @@ fun FileRowItem(
     }
 }
 
+@Composable
+fun PermissionRequestScreen(onRequestPermission: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "Storage Permission Required",
+                style = MaterialTheme.typography.headlineSmall
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "All Files Access is required to read and list files from public external storage directories.",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(onClick = onRequestPermission) {
+                Text("Grant Permission in Settings")
+            }
+        }
+    }
+}
+
 private fun formatFileSize(sizeInBytes: Long): String {
     if (sizeInBytes <= 0) return "0 B"
     val units = arrayOf("B", "KB", "MB", "GB")
@@ -623,21 +759,24 @@ private fun formatFileSize(sizeInBytes: Long): String {
     return String.format(Locale.getDefault(), "%.1f %s", sizeInBytes / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
 }
 
-private fun openFile(context: Context, file: File) {
+private fun openStorageNode(context: Context, node: StorageNode) {
     try {
-        val uri: Uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            file
-        )
+        val (uri, extension) = when (node) {
+            is StorageNode.LocalFileNode -> Pair(
+                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", node.file),
+                node.file.extension
+            )
+            is StorageNode.SafNode -> Pair(
+                node.document.uri,
+                node.name.substringAfterLast('.', "")
+            )
+        }
 
-        val extension = file.extension.lowercase(Locale.getDefault())
-        var mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
-
+        var mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension.lowercase(Locale.getDefault()))
         if (mimeType == null) {
-            mimeType = when (extension) {
+            mimeType = when (extension.lowercase(Locale.getDefault())) {
                 "pdf" -> "application/pdf"
-                "txt", "log", "conf" -> "text/plain"
+                "txt", "log", "conf", "sh", "py" -> "text/plain"
                 "json" -> "application/json"
                 "zip", "rar", "7z", "tar", "gz" -> "application/zip"
                 "apk" -> "application/vnd.android.package-archive"
@@ -653,10 +792,9 @@ private fun openFile(context: Context, file: File) {
 
         val chooserIntent = Intent.createChooser(intent, "Open file with...")
         chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-
         context.startActivity(chooserIntent)
     } catch (e: Exception) {
         e.printStackTrace()
-        Toast.makeText(context, "No app available to open ${file.name}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "No app available to open ${node.name}", Toast.LENGTH_SHORT).show()
     }
 }
