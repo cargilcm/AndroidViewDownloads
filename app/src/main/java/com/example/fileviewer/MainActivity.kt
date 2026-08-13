@@ -196,11 +196,10 @@ fun FileBrowserScreen(
     var showOptionsMenu by remember { mutableStateOf(false) }
     var selectedFileForOptions by remember { mutableStateOf<File?>(null) }
 
-    // 1. Refresh state controls
+    // 1. Fixed: Standard mutableStateOf / mutableIntStateOf initialization
     var isRefreshing by remember { mutableStateOf(false) }
-    var refreshTrigger by rememberIntStateOf(0)
+    var refreshTrigger by remember { mutableStateOf(0) }
 
-    // 2. State recomputes only when directory changes, filters update, or pull-to-refresh triggers
     val directoryContentState by produceState<DirectoryContent>(
         initialValue = DirectoryContent(emptyList(), emptyList()),
         currentDirectory,
@@ -267,8 +266,7 @@ fun FileBrowserScreen(
 
             DirectoryContent(folderStates, fileStates)
         }
-        
-        // Hide the pull-to-refresh spinner once background work completes
+
         isRefreshing = false
     }
 
@@ -369,12 +367,12 @@ fun FileBrowserScreen(
             }
         }
     ) { innerPadding ->
-        // 3. Wrap list in PullToRefreshBox
         PullToRefreshBox(
             isRefreshing = isRefreshing,
             onRefresh = {
                 isRefreshing = true
-                refreshTrigger++
+                // 2. Fixed: Avoid '++' operator ambiguity on delegated Compose state properties
+                refreshTrigger += 1
             },
             modifier = modifier
                 .fillMaxSize()
@@ -435,6 +433,7 @@ fun FileBrowserScreen(
         }
     }
 }
+
 
 @Composable
 fun rememberSvgImageLoader(context: Context): ImageLoader {
